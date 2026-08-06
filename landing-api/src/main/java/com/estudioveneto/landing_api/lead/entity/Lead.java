@@ -22,6 +22,9 @@ public class Lead {
     @Column(nullable = false)
     private String email;
 
+    @Column(name = "preferencia_contato", nullable = false)
+    private String preferenciaContato; // "email" | "whatsapp" | "ligacao"
+
     @Column(name = "criado_em", nullable = false)
     private LocalDateTime criadoEm = LocalDateTime.now();
 }

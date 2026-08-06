@@ -29,10 +29,19 @@ public class LeadService {
         lead.setNome(dto.nome());
         lead.setTelefone(dto.telefone());
         lead.setEmail(dto.email());
-
+        lead.setPreferenciaContato(dto.preferenciaContato());
         Lead salvo = leadRepository.save(lead);
         enviarNotificacao(salvo);
         return salvo;
+    }
+
+    private String traduzirPreferencia(String valor) {
+        return switch (valor) {
+            case "email" -> "E-mail";
+            case "whatsapp" -> "WhatsApp";
+            case "ligacao" -> "Ligação";
+            default -> valor;
+        };
     }
 
     private void enviarNotificacao(Lead lead) {
@@ -42,16 +51,16 @@ public class LeadService {
             message.setTo(corretorEmail);
             message.setSubject("Novo lead - Studios Veneto");
             message.setText("""
-                    Novo lead recebido pela landing page:
+                Novo lead recebido pela landing page:
 
-                    Nome: %s
-                    Telefone: %s
-                    E-mail: %s
-                    """.formatted(lead.getNome(), lead.getTelefone(), lead.getEmail()));
+                Nome: %s
+                Telefone: %s
+                E-mail: %s
+                Prefere contato via: %s
+                """.formatted(lead.getNome(), lead.getTelefone(), lead.getEmail(), traduzirPreferencia(lead.getPreferenciaContato())));
 
             mailSender.send(message);
         } catch (Exception e) {
-            // não deixa a falha de e-mail quebrar o salvamento do lead
             System.err.println("Falha ao enviar e-mail de notificação: " + e.getMessage());
         }
     }
