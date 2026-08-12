@@ -1,0 +1,8 @@
+target/
+.idea/
+*.iml
+.git/
+.gitignore
+application-local.properties
+.env
+README.md
