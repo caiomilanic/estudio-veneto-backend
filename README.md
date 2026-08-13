@@ -3,6 +3,7 @@
 **API REST em Spring Boot** responsável por servir o conteúdo dinâmico da landing page do empreendimento Studios Veneto (MK2 Incorporadora) e capturar leads, com notificação automática por e-mail para o time de corretores.
 
 > 🔗 Repositório do frontend: [`estudio-veneto-frontend`](https://github.com/caiomilanic/estudio-veneto-frontend)
+> 🌐 Produção: [`estudio-veneto-backend.onrender.com`](https://estudio-veneto-backend.onrender.com) · domínio próprio (`api.studiosveneto.com.br`) em configuração
 
 ---
 
@@ -18,6 +19,7 @@ Este backend serve como fonte única de dados para a landing page — textos ins
 - [Estrutura do projeto](#-estrutura-do-projeto)
 - [Endpoints da API](#-endpoints-da-api)
 - [Como rodar localmente](#-como-rodar-localmente)
+- [Deploy em produção](#-deploy-em-produção)
 - [Variáveis de ambiente](#-variáveis-de-ambiente)
 - [Roadmap](#-roadmap)
 - [Aprendizados técnicos](#-aprendizados-técnicos)
@@ -31,15 +33,18 @@ Este backend serve como fonte única de dados para a landing page — textos ins
 | ☕ **Java 25** (LTS) | Linguagem principal |
 | 🍃 **Spring Boot 4.1** | Framework da API REST |
 | 🐘 **PostgreSQL** (via [Neon](https://neon.tech)) | Banco de dados serverless, região `sa-east-1` |
-| 📧 **[Brevo](https://brevo.com)** | Envio de e-mails transacionais (SMTP relay) |
+| 📧 **[Brevo](https://brevo.com)** | Envio de e-mails transacionais — **via API HTTP** (não SMTP, veja aprendizados) |
 | ✅ **Bean Validation** | Validação de DTOs de entrada |
+| 🔀 **Spring `@Async`** | Envio de e-mail em thread separada, sem travar a resposta do lead |
+| 🐳 **Docker** | Build multi-stage para deploy no Render |
 | 📦 **Maven** | Gerenciador de dependências e build |
+| ☁️ **Render** | Hospedagem (free tier) |
 
 ---
 
 ## 📂 Estrutura do projeto
 
-Organização **por feature** (não por camada técnica) — cada módulo carrega seus próprios `dto/`, `entity/`, `Controller`, `Service` e `Repository`:
+Organização **por feature** — cada módulo carrega seus próprios `dto/`, `entity/`, `Controller`, `Service` e `Repository`:
 
 ```
 com.estudioveneto.landingapi
@@ -52,7 +57,7 @@ com.estudioveneto.landingapi
 │   └── *Repository.java
 │
 ├── 📁 pricing/                  → tipologias e valores
-│   ├── 📁 dto/                    UnitDTO
+│   ├── 📁 dto/                    UnitDTO (tipo, areaPrivativa, areaTotal, areaJardim, precoAPartirDe)
 │   ├── 📁 entity/                 Unit
 │   ├── UnitController.java        GET /api/units
 │   ├── UnitService.java
@@ -60,18 +65,25 @@ com.estudioveneto.landingapi
 │
 ├── 📁 lead/                     → captação de leads
 │   ├── 📁 dto/                    LeadRequestDTO (com Bean Validation)
-│   ├── 📁 entity/                 Lead
+│   ├── 📁 entity/                 Lead (inclui preferenciaContato: email | whatsapp | ligacao)
 │   ├── LeadController.java        POST /api/leads
-│   ├── LeadService.java           ✉️ salva no banco + dispara e-mail via Brevo
+│   ├── LeadService.java           salva no banco e delega notificação
+│   ├── BrevoEmailService.java     ✉️ envia e-mail via API HTTP do Brevo (@Async)
 │   └── LeadRepository.java
 │
 ├── 📁 config/
-│   └── CorsConfig.java            libera a origem do frontend (Vite)
+│   └── CorsConfig.java            origens permitidas (frontend Vercel)
 │
 ├── 📁 exception/
 │   └── GlobalExceptionHandler.java
 │
-└── LandingApiApplication.java
+└── LandingApiApplication.java     @EnableAsync
+```
+
+**Arquivos de infraestrutura (raiz do projeto):**
+```
+├── Dockerfile          → build multi-stage (JDK para build, JRE para runtime)
+└── .dockerignore
 ```
 
 ---
@@ -84,8 +96,8 @@ com.estudioveneto.landingapi
 | `GET` | `/api/photos` | Fotos do empreendimento (URLs Cloudinary), ordenadas por `displayOrder` |
 | `GET` | `/api/social-links` | Instagram e WhatsApp (número + mensagem padrão) |
 | `GET` | `/api/highlights?category=` | Lista de destaques — `category=localizacao` ou `category=diferenciais` |
-| `GET` | `/api/units` | Tipologias disponíveis (Studio / Studio Garden), com metragem e preço |
-| `POST` | `/api/leads` | 📨 Captura um novo lead e dispara notificação por e-mail para o corretor |
+| `GET` | `/api/units` | Tipologias disponíveis, com área privativa, área total, área de jardim (quando aplicável) e preço |
+| `POST` | `/api/leads` | 📨 Captura um novo lead e dispara notificação por e-mail para o corretor (assíncrono) |
 
 <details>
 <summary>📦 Exemplo de payload — <code>POST /api/leads</code></summary>
@@ -94,7 +106,8 @@ com.estudioveneto.landingapi
 {
   "nome": "Maria Silva",
   "telefone": "(41) 99999-9999",
-  "email": "maria@exemplo.com"
+  "email": "maria@exemplo.com",
+  "preferenciaContato": "whatsapp"
 }
 ```
 
@@ -102,6 +115,7 @@ com.estudioveneto.landingapi
 - `nome` — obrigatório
 - `telefone` — obrigatório
 - `email` — obrigatório e formato válido
+- `preferenciaContato` — obrigatório, aceita apenas `email`, `whatsapp` ou `ligacao`
 </details>
 
 <details>
@@ -109,8 +123,20 @@ com.estudioveneto.landingapi
 
 ```json
 [
-  { "tipo": "Studio", "metragem": 18.0, "precoAPartirDe": 199900.00 },
-  { "tipo": "Studio Garden", "metragem": 19.0, "precoAPartirDe": 219900.00 }
+  {
+    "tipo": "Studio",
+    "areaPrivativa": "18,33m² a 19,39m²",
+    "areaTotal": "24,39m² a 25,80m²",
+    "areaJardim": null,
+    "precoAPartirDe": 199000.00
+  },
+  {
+    "tipo": "Studio Garden",
+    "areaPrivativa": "18,33m² a 19,39m²",
+    "areaTotal": "24,39m² a 25,80m²",
+    "areaJardim": "14,52m² a 25,98m²",
+    "precoAPartirDe": 219900.00
+  }
 ]
 ```
 </details>
@@ -123,7 +149,7 @@ com.estudioveneto.landingapi
 - ☕ Java 25
 - 📦 Maven (ou use o wrapper `./mvnw` incluído)
 - 🐘 Conta no [Neon](https://neon.tech) — Postgres serverless
-- 📧 Conta no [Brevo](https://brevo.com) — SMTP transacional, com remetente verificado
+- 📧 Conta no [Brevo](https://brevo.com) — API Key transacional (não SMTP), com remetente verificado
 
 ### Passos
 
@@ -142,6 +168,17 @@ http://localhost:8080/api/content
 
 ---
 
+## ☁️ Deploy em produção
+
+Hospedado no **Render** (free tier), via **Docker**.
+
+- O `Dockerfile` usa build multi-stage: um estágio compila com Maven + JDK completo, o outro roda só com JRE (imagem final mais enxuta)
+- **Root Directory** configurado como `landing-api` no painel do Render (o repositório tem essa subpasta na raiz)
+- `server.port=${PORT:8080}` no `application.properties` — obrigatório, já que o Render define a porta dinamicamente via variável `PORT`
+- **Keep-alive:** o free tier do Render "dorme" após ~15 min de inatividade. Um monitor no [UptimeRobot](https://uptimerobot.com) pinga `/actuator/health` a cada 5 minutos para manter o serviço ativo
+
+---
+
 ## 🔐 Variáveis de ambiente
 
 | Variável | Descrição |
@@ -150,12 +187,13 @@ http://localhost:8080/api/content
 | `DB_NAME` | Nome do banco (`neondb`) |
 | `DB_USER` | Usuário do Postgres |
 | `DB_PASSWORD` | Senha do Postgres |
-| `BREVO_SMTP_USER` | Login SMTP do Brevo (formato `xxxxxxx001@smtp-brevo.com`) |
-| `BREVO_SMTP_KEY` | Chave SMTP gerada no painel do Brevo |
+| `BREVO_API_KEY` | Chave de **API** do Brevo (aba *API Keys*, **não** a chave SMTP) |
 | `LEAD_SENDER_EMAIL` | E-mail remetente, **verificado** no Brevo (Settings → Senders & IP) |
 | `CORRETOR_EMAIL` | E-mail que recebe a notificação de cada novo lead |
 
-> ⚠️ **Importante:** configure essas variáveis diretamente na *Run Configuration* da sua IDE (IntelliJ: Run → Edit Configurations → Environment Variables). Definir só no terminal via `export` não é suficiente se você rodar a aplicação pela IDE — o Spring resolve `${DB_HOST}` literalmente e quebra com `UnknownHostException`.
+> ⚠️ **Render free tier bloqueia portas SMTP de saída (25, 465, 587).** Por isso o envio de e-mail migrou de SMTP para a **API HTTP do Brevo** (porta 443, sempre liberada). As variáveis `BREVO_SMTP_USER`/`BREVO_SMTP_KEY` (antigas) não são mais usadas.
+
+> ⚠️ Configure essas variáveis diretamente na *Run Configuration* da sua IDE em desenvolvimento local — definir só via `export` no terminal não é suficiente se você rodar pela IDE.
 
 > 🔒 Nunca commite `application-local.properties` nem qualquer arquivo com credenciais reais — já estão no `.gitignore`.
 
@@ -165,24 +203,28 @@ http://localhost:8080/api/content
 
 ### ✅ Concluído
 - [x] Endpoints de conteúdo (`content`, `photos`, `social-links`, `highlights`, `units`)
-- [x] Captura de leads com validação
-- [x] Notificação automática por e-mail via Brevo
-- [x] CORS configurado para o frontend
-- [x] Dados reais do empreendimento populados no Neon
+- [x] Captura de leads com validação, incluindo preferência de contato
+- [x] Notificação por e-mail via API HTTP do Brevo, assíncrona
+- [x] Dockerfile e deploy em produção no Render
+- [x] Keep-alive configurado via UptimeRobot
+- [x] Domínio `studiosveneto.com.br` registrado (Registro.br)
 
 ### 🚧 Pendente
-- [ ] ☁️ Hospedagem em produção (Render ou Railway)
-- [ ] ✉️ Migração do remetente de e-mail para domínio próprio, com autenticação SPF/DKIM
-- [ ] 🧪 Teste de carga/monitoramento básico (Actuator)
+- [ ] 🌐 Finalizar propagação DNS e apontar `api.studiosveneto.com.br` para o Render
+- [ ] 🔒 Travar CORS para a origem final do domínio próprio (hoje usa `allowedOriginPatterns` com wildcard `*.vercel.app`)
+- [ ] ✉️ Autenticar domínio próprio no Brevo (SPF/DKIM), migrando o remetente do Gmail para `contato@studiosveneto.com.br`
 
 ---
 
 ## 💡 Aprendizados técnicos
 
 - 🌍 Variáveis de ambiente devem ser configuradas **na IDE**, não apenas no terminal — senão o Spring resolve `${DB_HOST}` literalmente e lança `UnknownHostException`
-- 📧 No Brevo, **login SMTP ≠ e-mail remetente** — são credenciais distintas. O remetente precisa ser verificado separadamente em *Settings → Senders & IP*
-- 🔌 O endpoint **pooled** do Neon (com sufixo `-pooler`) é o correto para uma aplicação web que abre/fecha conexões constantemente — evita esgotar o limite de conexões diretas do Postgres
-- 🔧 CORS precisa liberar explicitamente a origem do Vite (`http://localhost:5173` em dev)
+- 🔌 O endpoint **pooled** do Neon (com sufixo `-pooler`) é o correto para uma aplicação web que abre/fecha conexões constantemente
+- 🔧 CORS precisa liberar explicitamente a origem do frontend — em produção, usar `allowedOriginPatterns` (com wildcard) quando a URL do deploy ainda não é fixa/definitiva
+- 🐳 Ao fazer deploy de um repositório com subpasta (`landing-api/` dentro do repo), é preciso configurar o **Root Directory** no Render, senão o build não encontra o `Dockerfile`
+- 🚫 **Render bloqueia outbound SMTP (portas 25, 465, 587) no free tier desde set/2025.** Isso causa dois sintomas ao mesmo tempo: e-mails que nunca chegam *e* requisições lentas (a conexão SMTP trava até estourar timeout, dentro da mesma requisição). A solução foi migrar para a **API HTTP do Brevo** (porta 443, nunca bloqueada) e tornar o envio **assíncrono** (`@Async`), para que a resposta do lead nunca dependa do envio de e-mail
+- 😴 O free tier do Render "dorme" após ~15 min de inatividade, com cold start de até ~1 minuto — resolvido com ping periódico via UptimeRobot no endpoint `/actuator/health`
+- 📧 No Brevo, **login SMTP ≠ e-mail remetente ≠ API Key** — são três credenciais distintas, cada uma com seu propósito
 
 ---
 
