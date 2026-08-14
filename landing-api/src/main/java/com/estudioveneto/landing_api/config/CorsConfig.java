@@ -1,4 +1,4 @@
-package com.estudioveneto.landing_api.config;
+package com.estudioveneto.landingapi.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -10,7 +10,11 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("http://localhost:5173", "https://*.vercel.app")
+                .allowedOrigins(
+                        "https://www.studiosveneto.com.br",
+                        "https://studiosveneto.com.br",
+                        "http://localhost:5173"
+                )
                 .allowedMethods("GET", "POST", "PUT", "DELETE")
                 .allowedHeaders("*");
     }
