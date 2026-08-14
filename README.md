@@ -214,10 +214,8 @@ Hospedado no **Render** (free tier), via **Docker**, com domínio próprio.
 - [x] Subdomínio próprio `api.studiosveneto.com.br` com SSL
 - [x] CORS travado para as origens de produção definitivas
 - [x] Autenticação de domínio no Brevo (SPF/DKIM) e remetente migrado para o domínio próprio
-
-### 🚧 Pendente (baixa prioridade)
-- [ ] 📱 Revisão de responsividade em mais dispositivos reais (landscape mobile já corrigido)
-- [ ] 🖼️ Tratamento visual da imagem de planta baixa na galeria (fundo branco destoa das fotos)
+- [x] Revisão de responsividade em mais dispositivos reais (landscape mobile já corrigido)
+- [x] Tratamento visual da imagem de planta baixa na galeria (fundo branco destoa das fotos)
 
 ---
 
