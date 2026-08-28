@@ -180,7 +180,7 @@ Hospedado no **Render** (free tier), via **Docker**, com domínio próprio.
 - `server.port=${PORT:8080}` no `application.properties` — obrigatório, já que o Render define a porta dinamicamente
 - **Domínio customizado:** subdomínio `api.studiosveneto.com.br` conectado via `CNAME` no Registro.br, apontando para `estudio-veneto-backend.onrender.com`, com SSL emitido automaticamente pelo Render
 - **CORS travado** para as origens de produção (`https://www.studiosveneto.com.br`, `https://studiosveneto.com.br`) e `localhost:5173` para desenvolvimento — sem wildcard
-- **Keep-alive:** monitor no [UptimeRobot](https://uptimerobot.com) pinga `/actuator/health` a cada 5 minutos, evitando o cold start do free tier
+- **Keep-alive:** monitor no [UptimeRobot](https://uptimerobot.com) pinga `/actuator/health/liveness` a cada 10 minutos, evitando o cold start do free tier do Render **sem** acionar o banco (ver [Aprendizados técnicos](#-aprendizados-técnicos))
 
 ---
 
@@ -228,7 +228,9 @@ Hospedado no **Render** (free tier), via **Docker**, com domínio próprio.
 - 🐳 Ao fazer deploy de um repositório com subpasta (`landing-api/` dentro do repo), é preciso configurar o **Root Directory** no Render
 - 🔧 Um erro de digitação (typo) no nome/anotação da classe `CorsConfig` faz o Spring simplesmente **ignorar a configuração inteira**, sem lançar erro nenhum — o sintoma é um `OPTIONS`/`GET` retornando `200` normalmente, mas sem nenhum header `Access-Control-Allow-Origin`, o que engana bastante na hora de diagnosticar (parece "não configurado" em vez de "erro de digitação")
 - 🌐 Subdomínios customizados no Render (`api.studiosveneto.com.br`) seguem o mesmo padrão de verificação por `CNAME` + emissão automática de SSL que vimos na Vercel — o botão "Retry Verification" só funciona depois que o DNS realmente propagou, checável via `nslookup`
-
+- 😴 O free tier do Render "dorme" após ~15 min de inatividade — resolvido com ping periódico via UptimeRobot
+- 🐘 **Cuidado com *qual* endpoint de health check você usa pra keep-alive.** `/actuator/health` por padrão no Spring Boot Actuator agrega *todos* os indicators disponíveis — incluindo o `db`, que abre uma conexão real com o Postgres pra validar. Um monitor externo (UptimeRobot) pingando esse endpoint a cada 5 min mantinha o compute do **Neon** ativo quase 24/7, porque cada ping "acordava" o banco bem na hora em que ele ia autossuspender — isso esgotou as 100 CU-hours do plano free do Neon em um mês sem tráfego real algum. Correção: separar **liveness** (`/actuator/health/liveness`, só confirma que o processo está de pé, não toca no banco) de **readiness** (`/actuator/health/readiness`, inclui o `db`, uso interno) via `management.endpoint.health.group.*.include`, e apontar o monitor externo só pro `/liveness`. Complementado com `spring.datasource.hikari.minimum-idle=0` + `idle-timeout` curto, pra o pool de conexões não segurar sockets abertos com o Neon quando não há requisição real em andamento
+- 📐 Nesse Spring Boot (parent `spring-boot-starter-parent` 4.1.0), a propriedade `management.endpoint.health.group.<nome>.include` exige **notação indexada** em `.properties` (`include[0]=...`, `include[1]=...`) — o formato antigo separado por vírgula (`include=a,b`) ainda funciona em runtime via relaxed binding, mas o inspector da IDE acusa "Index access required" porque a metadata mudou de tipo nas classes novas de Health (pacote `org.springframework.boot.health.autoconfigure.actuate.endpoint`)
 ---
 
 ## 🏢 Sobre a incorporadora
